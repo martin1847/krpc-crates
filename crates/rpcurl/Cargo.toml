@@ -1,0 +1,18 @@
+[package]
+name = "rpcurl"
+version = "0.1.0"
+description = "cli tool for krpc client"
+rust-version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# krpc = "0.2.0"
+# local deps
+krpc.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
