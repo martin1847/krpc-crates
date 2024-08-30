@@ -1,7 +1,7 @@
 [package]
 name = "rpcurl"
-version = "0.1.0"
-description = "cli tool for krpc client"
+version = "24.8.30"
+description = "🦀[ Cli Client For KRPC ]"
 rust-version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,10 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-# krpc = "0.2.0"
+clap = { version = "4.5.16", features = ["derive","env"] }
+gethostname = "0.5.0"
+serde_json = "1.0.127"
+tonic = "0.12.2"
 # local deps
 krpc.workspace = true
 tokio.workspace = true

@@ -15,7 +15,8 @@ repository = "https://github.com/martin1847/krpc-crates"
 [workspace.dependencies]
 # local crates
 # base-db = { path = "./crates/base-db", version = "0.0.0" }
-krpc = { path = "../krpc-rust", features = ["clt"] ,default-features = false }
+# krpc = { path = "../krpc-rust", features = ["clt"] ,default-features = false }
+krpc = { git = "https://github.com/martin1847/krpc-rust", branch = "main", features = ["clt"] ,default-features = false  }
 tokio = "1.39.3"
 
 
