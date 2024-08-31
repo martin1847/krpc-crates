@@ -29,6 +29,7 @@ cargo run $DEMO/bytesTime
 rpcurl $DEMO/testRuntimeException
 rpcurl $DEMO/testMap
 rpcurl $DEMO/inc100 -d 123
+# widows / powershell 双引号转义下  -d '\"krpc\"'
 rpcurl $DEMO/str -d '"krpc"'
 # input bytes now not support. maybe  base64:schema later.
 rpcurl $DEMO/incBytes -d '[123,233,456]'
