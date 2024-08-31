@@ -10,8 +10,10 @@ cargo add clap --features derive
 
 ```bash
 export KRPC_TOKEN=env.token 
-export REMOTE=http://127.0.0.1:50051
+export REMOTE="http://127.0.0.1:50051"
 export DEMO="$REMOTE/demo-java-server/Demo"
+# powershell
+$Env:DEMO = "" 
 # 🍀 测试正常返回
 cargo run $DEMO/hello -d '{"name":"我是Rust","age":28}' -H a=123 -H 123=c-id -v
 # 🍀 文件作为输入数据
