@@ -9,14 +9,27 @@ cargo add clap --features derive
 ```
 
 ```bash
-RPC_TOKEN2=env.token 
+export KRPC_TOKEN=env.token 
 export REMOTE=http://127.0.0.1:50051
+export DEMO="$REMOTE/demo-java-server/Demo"
 # 🍀 测试正常返回
-cargo run $REMOTE/demo-java-server/Demo/hello -d '{"name":"我是Rust","age":28}' -H a=123 -H 123=c-id -v
+cargo run $DEMO/hello -d '{"name":"我是Rust","age":28}' -H a=123 -H 123=c-id -v
 # 🍀 文件作为输入数据
-cargo run $REMOTE/demo-java-server/Demo/hello -f test.json
+cargo run $DEMO/hello -f test.json
 # ❌ 测试logicError
-cargo run $REMOTE/demo-java-server/Demo/testLogicError -d 123
+cargo run $DEMO/testLogicError -d 123
 # 🌱 测试bytes
-cargo run $REMOTE/demo-java-server/Demo/bytesTime
+cargo run $DEMO/bytesTime
+```
+
+
+测试不同数据：
+
+```bash
+rpcurl $DEMO/testRuntimeException
+rpcurl $DEMO/testMap
+rpcurl $DEMO/inc100 -d 123
+rpcurl $DEMO/str -d '"krpc"'
+# input bytes now not support. maybe  base64:schema later.
+rpcurl $DEMO/incBytes -d '[123,233,456]'
 ```
