@@ -17,5 +17,9 @@ tonic = "0.12.2"
 krpc.workspace = true
 tokio.workspace = true
 
+
+[build-dependencies]
+static_vcruntime = "2.0.0"
+
 [lints]
 workspace = true

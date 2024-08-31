@@ -4,39 +4,39 @@ use serde_json::{from_str, Value};
 #[derive(clap::Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub(crate) struct Args {
-    /// RPC服务的URL,如 https://demo.krpc.api/appName/DemoService/methodName
+    /// RPC服务的URL,如 https://demo.krpc.tech/appName/DemoService/methodName
     url: String,
 
-    /// 入参json, 优先级高于file, eg : -d '{"name":"KRPC"}'
+    /// 入参json, 优先级高于file, e.g. `-d '{"name":"KRPC"}'`
     #[arg(short, long)]
     data: Option<String>,
 
-    /// 入参jsonFile, eg : -f test.json
+    /// 入参jsonFile, e.g. `-f test.json`
     #[arg(short, long)]
     file: Option<String>,
 
-    /// Authorization: Bearer <accessToken>, 也可通过环境变量`RPC_TOKEN`传递
-    #[arg(short, long, env = "RPC_TOKEN")]
+    /// Authorization: Bearer <accessToken>, 支持环境变量传值
+    #[arg(short, long, env = "KRPC_TOKEN")]
     token: Option<String>,
 
-    /// Cookie, 也可通过环境变量`RPC_COOKIE`传递
-    #[arg(short, long, env = "RPC_COOKIE")]
+    /// Cookie, e.g. `tk=j.w.t`
+    #[arg(short, long, env = "KRPC_COOKIE")]
     cookie: Option<String>,
 
-    /// 设置c-id, 或者环境变量 `RPC_CID`
-    #[arg(short = 'i', long, env = "RPC_CID")]
+    /// 客户端id，便于tracking
+    #[arg(short = 'i', long, env = "KRPC_CID")]
     c_id: Option<String>,
 
-    /// 设置 c-meta(json), 或者环境变量 `RPC_CMETA`
-    #[arg(short = 'm', long, env = "RPC_CMETA")]
+    /// 客户端meta
+    #[arg(short = 'm', long, env = "KRPC_CMETA")]
     c_meta: Option<String>,
 
-    /// Custom header(s) -H a=b -H c=d
+    /// Custom headers, e.g. `-H a=b -H c=d`
     #[arg(short = 'H', long)]
     header: Option<Vec<String>>,
 
     // same with python
-    /// Verbose mode, print headers/input/url etc
+    /// Verbose mode, prints headers, input, URL, etc.
     #[arg(short, long, action = clap::ArgAction::SetTrue)]
     pub verbose: bool,
 }
