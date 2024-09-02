@@ -708,7 +708,7 @@ dependencies = [
 [[package]]
 name = "krpc"
 version = "0.1.0"
-source = "git+https://github.com/martin1847/krpc-rust?branch=main#9a13af20adb387d6b3bf7447e4dd1fed736f710e"
+source = "git+https://github.com/martin1847/krpc-rust?branch=main#1fe11a9bb5b98086990bf55c4e8ce8e1cf345123"
 dependencies = [
  "prost",
  "rustls",
