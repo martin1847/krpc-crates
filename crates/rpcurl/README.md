@@ -36,3 +36,12 @@ rpcurl $DEMO/str -d '"krpc"'
 # input bytes now not support. maybe  base64:schema later.
 rpcurl $DEMO/incBytes -d '[123,233,456]'
 ```
+
+## 性能火焰图
+
+![flamegraph](./flamegraph.svg)
+
+```bash
+#cargo install flamegraph
+sudo flamegraph -- rpcurl $DEMO/hello -d '{"name":"我是Rust","age":28}' -v
+```
