@@ -66,8 +66,13 @@ jobs:
           cargo install --force --locked bindgen-cli
 
       - name: Build
+        if: runner.os != 'Windows'
+        run: cargo build --locked -p rpcurl --release --target ${{ matrix.target }}
+
+      - name: Build Windows
+        if: runner.os == 'Windows'
         env:
-          AWS_LC_SYS_EXTERNAL_BINDGEN: ${{ runner.os == 'Windows' && '1' || '' }}
+          AWS_LC_SYS_EXTERNAL_BINDGEN: "1"
         run: cargo build --locked -p rpcurl --release --target ${{ matrix.target }}
 
       - name: Package
