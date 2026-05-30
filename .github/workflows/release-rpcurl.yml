@@ -61,9 +61,13 @@ jobs:
       - name: Install Windows build tools
         if: runner.os == 'Windows'
         shell: pwsh
-        run: choco install nasm -y
+        run: |
+          choco install nasm llvm -y
+          cargo install --force --locked bindgen-cli
 
       - name: Build
+        env:
+          AWS_LC_SYS_EXTERNAL_BINDGEN: ${{ runner.os == 'Windows' && '1' || '' }}
         run: cargo build --locked -p rpcurl --release --target ${{ matrix.target }}
 
       - name: Package
