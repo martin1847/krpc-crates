@@ -76,6 +76,7 @@ jobs:
         run: cargo build --locked -p rpcurl --release --target ${{ matrix.target }}
 
       - name: Package
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
@@ -85,6 +86,17 @@ jobs:
           mkdir -p "dist/${asset}"
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${asset}/"
           (cd dist && zip -r "${asset}.zip" "${asset}")
+
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tagName = "${{ inputs.tag_name || github.ref_name }}"
+          $version = $tagName.TrimStart("v")
+          $asset = "rpcurl-$version-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "dist/$asset" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/$asset/"
+          Compress-Archive -Path "dist/$asset" -DestinationPath "dist/$asset.zip" -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
