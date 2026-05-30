@@ -1,6 +1,6 @@
 [package]
 name = "rpcurl"
-version = "24.8.30"
+version = "1.0.0-rc.1"
 description = "🦀[ Cli Client For KRPC ]"
 rust-version.workspace = true
 edition.workspace = true
