@@ -11,8 +11,14 @@ repository.workspace = true
 [dependencies]
 clap = { version = "4.6.1", features = ["derive","env"] }
 gethostname = "1.1.0"
+serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tonic = "0.14.6"
+# plain-HTTP client for /agent/discover introspection (reuses tonic's hyper stack)
+hyper = { version = "1.10", features = ["client", "http1"] }
+hyper-util = { version = "0.1.20", features = ["client-legacy", "http1", "tokio"] }
+http-body-util = "0.1.3"
+bytes = "1"
 # local deps
 krpc.workspace = true
 tokio.workspace = true
