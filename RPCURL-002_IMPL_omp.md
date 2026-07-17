@@ -240,3 +240,45 @@ contract; README output section + flags table updated.
 ### Gates (impl r3)
 `cargo test -p rpcurl` → **67 passed** (36 unit + 31 integration); `cargo clippy
 --all-targets -p rpcurl -- -D warnings` → **0 warnings**; `cargo build -r -p rpcurl` → OK.
+
+---
+
+## CI — split PR validation from tag release (separate 3rd commit)
+
+Before: the only workflow was `release-rpcurl.yml` (tag-triggered: 4-target build +
+package + GitHub Release). No PR CI — build/test/lint health was unknown before merge.
+
+Delivered three workflows:
+
+- **`build-rpcurl.yml`** (new, **reusable `workflow_call`**) — the single source of the
+  4-target build matrix (aarch64/x86_64-darwin, x86_64-musl, x86_64-windows) and its
+  toolchain + per-OS build-tool steps. Inputs: `package` (bool, default false),
+  `tag_name`, `ref`. When `package=false` it builds only; when `package=true` it zips to
+  `dist/` and uploads per-target artifacts.
+- **`ci.yml`** (new) — `pull_request` (with a `paths` filter: `**/*.rs`, `**/Cargo.toml`,
+  `Cargo.lock`, `.github/workflows/**` — docs-only PRs skip the 4 runners) +
+  `workflow_dispatch`. Jobs: `build` (calls `build-rpcurl.yml` with `package: false` →
+  same 4-target build, no packaging/artifacts/release), `test` (matrix macOS/Linux/Windows,
+  host toolchain, `cargo test --locked -p rpcurl`), `clippy` (ubuntu only,
+  `cargo clippy --all-targets --locked -p rpcurl -- -D warnings`).
+- **`release-rpcurl.yml`** (refactored) — triggers/behavior unchanged (tag `v*` +
+  `workflow_dispatch`, `contents: write`, package + GitHub Release). Its `build` job now
+  `uses: ./.github/workflows/build-rpcurl.yml` with `package: true`; the `release` job is
+  byte-for-byte the same publish logic (download artifacts → SHA256SUMS → gh-release).
+
+**Single-source choice:** reusable `workflow_call` (maintainer's preferred "can never
+drift" option). It was not disproportionately complex — the build job moved verbatim into
+the reusable workflow behind three inputs; the release path keeps identical observable
+behavior. Artifacts uploaded inside the reusable workflow are consumed by the caller's
+`release` job in the same run (standard GHA behavior). The per-OS build-tool install steps
+are also needed by CI's `test`/`clippy` (they compile the crate), so those are mirrored in
+`ci.yml` — that duplication is inherent (host tests vs cross-build), not matrix drift.
+
+**Validation:** `actionlint 1.7.12` → **clean (exit 0)** on all three workflows (also
+fixed two pre-existing shellcheck `info`/`style` findings in the release meta step —
+`sha256sum ./*.zip` and grouped `>> "$GITHUB_OUTPUT"` — behavior-identical). **Honest
+limitation:** GitHub Actions workflows cannot be fully verified without pushing to a repo
+with Actions enabled — `workflow_call` wiring, artifact cross-boundary passing, the PR
+`paths` filter, and per-OS runner behavior are validated by actionlint (static) only, not
+executed here. Commit: `ci: split PR validation from tag release` (3rd on this branch,
+local, no push).
