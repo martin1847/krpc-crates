@@ -36,8 +36,12 @@ rpcurl --human $DEMO/hello -d '{"name":"KRPC"}'    # -> 🍀 pretty, decorated
 - `-v/--verbose` adds framed `type:"debug"` records in machine mode; values for
   `authorization`, `cookie`, `c-id` (defaults to `r-<hostname>`) and `c-meta` are
   redacted (wire headers unchanged). Decorated blocks in human mode.
-- `--help` / `--version` obey the mode too: machine mode emits a JSON object on stdout
-  (`{"help":…}` / `{"name","version"}`); human mode prints clap's text. Exit 0.
+- `--help` / `--version` obey the mode too. Default (machine): `--version` →
+  `{"name","version"}`; `--help` → **structured** self-description derived from the CLI
+  model — `{name, version, usage, args[], subcommands[], exit_codes{}}` where each arg has
+  `{name, short, aliases[], takes_value, value_name, doc}` (`--oauth2-bearer` is an alias
+  of `--token`; `value_name` is null for flags). A real introspection surface, like
+  `discover`/`schema`. `--human` prints clap's text. Exit 0.
 
 ## Flags
 

@@ -282,3 +282,55 @@ with Actions enabled — `workflow_call` wiring, artifact cross-boundary passing
 `paths` filter, and per-OS runner behavior are validated by actionlint (static) only, not
 executed here. Commit: `ci: split PR validation from tag release` (3rd on this branch,
 local, no push).
+
+---
+
+## structured machine help (4th commit)
+
+Upgraded machine `--help` from the flat `{"help":"<text>"}` to a **structured
+self-description** derived programmatically from the clap `Command` model — a real
+introspection surface consistent with `discover`/`schema`:
+
+```json
+{"name":"rpcurl","version":"1.1.0","usage":"…","args":[{"name":"--max-time","short":"-m","takes_value":true,"value_name":"MAX_TIME","doc":"…"}],"subcommands":[{"name":"discover","doc":"…","args":[…]}],"exit_codes":{"0":"success","5":"timeout: …"}}
+```
+
+- **`main.rs::structured_help`** walks `Cli::command()` (`clap::CommandFactory`):
+  `render_usage`, `get_arguments` (→ `get_long`/`get_short`/`get_action().takes_values()`/
+  `get_value_names`/`get_help`), `get_subcommands`. **No hand-maintained parallel table** —
+  it cannot drift from the parser. Auto `help`/`version` args and the auto `help`
+  subcommand are excluded; inherited global flags (`--human`/`--verbose`) are listed once
+  at the root, not repeated on each subcommand (`is_global_set`).
+- **`error.rs::EXIT_CODES`** is the single-source exit-code→meaning table (mirrors the
+  module docs / `exit_code()`), surfaced under `exit_codes` (agent contract).
+- `--human --help` unchanged (clap decorated text). `--version` unchanged
+  (`{name,version}`).
+
+**Tests:** unit `structured_help_lists_every_clap_arg` iterates `Cli::command()` in the
+test itself and asserts each declared arg (minus auto/hidden) appears in the JSON — self-
+consistent, no hardcoded list; also checks `exit_codes`, subcommands (discover/schema/
+example, no auto `help`). Integration `help_default_is_structured_json` (structure +
+`exit_codes` + no legacy `help` key) and `help_human_mode_is_decorated_text` (clap text,
+not JSON). Design §2.1 help/version contract + README updated.
+
+### Gates (structured help)
+`cargo test -p rpcurl` → **69 passed** (37 unit + 32 integration); `cargo clippy
+--all-targets -p rpcurl -- -D warnings` → **0 warnings**; `cargo build -r -p rpcurl` → OK.
+Commit: `feat(rpcurl): structured machine help` (4th on this branch, local, no push).
+
+### structured help — CH1/CH2 fixes (amended into 4th commit)
+
+- **CH1 (value_name fidelity):** `args_json` now gates `get_value_names()` on
+  `get_action().takes_values()` — boolean flags (`--human`, `--verbose`) emit
+  `value_name: null`, consistent with `takes_value: false`.
+- **CH2 (aliases + recursive test):** added a machine `aliases` field per arg (from
+  `get_visible_aliases` + `get_visible_short_aliases`) — `--oauth2-bearer` is now a
+  structured field on `--token`, not just prose in `doc`. The self-consistency test is
+  now **recursive** (`assert_help_matches`): it walks every non-hidden/non-auto clap arg
+  AND every subcommand (excluding auto `help`) from `Cli::command()` and compares to the
+  emitted JSON — including value_name-null and alias fidelity — with **no hardcoded arg
+  or subcommand list**. Integration `help_default_is_structured_json` also asserts
+  `--human` value_name null + `--token` alias observably. Design §2.1 + README document
+  the `aliases`/`value_name` arg shape.
+- Gates: `cargo test -p rpcurl` → **69 passed** (37 unit + 32 integration); `cargo clippy
+  --all-targets -p rpcurl -- -D warnings` → **0 warnings**.

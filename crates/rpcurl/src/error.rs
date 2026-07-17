@@ -14,6 +14,18 @@
 //! |      | could not be parsed (introspection over HTTP)                |
 //! | 5    | timeout: `--connect-timeout` / `--max-time` exceeded         |
 
+/// Authoritative exit-code → meaning table (single source; mirrors the module
+/// docs above and [`CliError::exit_code`]). Surfaced in structured machine help
+/// as part of the agent contract.
+pub(crate) const EXIT_CODES: &[(&str, &str)] = &[
+    ("0", "success (data on stdout)"),
+    ("1", "remote error: server reachable, returned an error"),
+    ("2", "usage error: bad CLI input (url / json / file / args)"),
+    ("3", "connect error: could not establish a connection"),
+    ("4", "protocol error: server reached but replied non-2xx / unparseable body"),
+    ("5", "timeout: --connect-timeout / --max-time exceeded"),
+];
+
 /// Flatten an error and its `source()` chain into one message, e.g.
 /// `transport error: tcp connect error: Connection refused (os error 61)`.
 /// tonic's transport `Display` alone is just "transport error"; the actionable

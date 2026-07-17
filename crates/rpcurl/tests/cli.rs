@@ -335,7 +335,33 @@ fn help_default_is_structured_json() {
     assert!(out.status.success());
     let v: serde_json::Value =
         serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).expect("help -> JSON");
-    assert!(v["help"].as_str().unwrap().contains("Usage"));
+    assert_eq!(v["name"], "rpcurl");
+    assert!(v["version"].as_str().unwrap().starts_with("1.1"));
+    assert!(v["usage"].as_str().unwrap().contains("rpcurl"));
+    assert!(v["args"].as_array().unwrap().iter().any(|a| a["name"] == "--max-time"),
+        "structured args include the flags");
+    assert!(v["subcommands"].as_array().unwrap().iter().any(|s| s["name"] == "discover"));
+    assert!(v["exit_codes"]["5"].is_string(), "exit-code contract present");
+    assert!(v.get("help").is_none(), "no more flat {{\"help\":<text>}} shape");
+    // CH1: boolean flags carry no value_name. CH2: aliases are a machine field.
+    let args = v["args"].as_array().unwrap();
+    let human = args.iter().find(|a| a["name"] == "--human").expect("--human present");
+    assert_eq!(human["takes_value"], false);
+    assert!(human["value_name"].is_null(), "boolean flag has null value_name: {human}");
+    let token = args.iter().find(|a| a["name"] == "--token").expect("--token present");
+    assert!(
+        token["aliases"].as_array().unwrap().iter().any(|x| x == "--oauth2-bearer"),
+        "--oauth2-bearer is a structured alias: {token}"
+    );
+}
+
+#[test]
+fn help_human_mode_is_decorated_text() {
+    let out = run(&["--human", "--help"]);
+    assert!(out.status.success());
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("Usage:"), "clap decorated help text");
+    assert!(!s.trim_start().starts_with('{'), "human help is not JSON");
 }
 
 #[test]

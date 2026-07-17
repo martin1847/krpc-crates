@@ -215,9 +215,15 @@ diagnostics on stderr. Deterministic everywhere — the agent-native default.
 - **`--human`** (boolean, the only switch) opts into decorated output: emoji/pretty
   payload on stdout + decorated (⚠️/❌/`[label]`) diagnostics on stderr.
 - There is **no `--format` enum, no `auto`, no `IsTerminal` mode logic** — all removed.
-- **`--help` / `--version` obey the same rule**: default emits a single JSON object on
-  stdout (`--version` → `{"name":"rpcurl","version":"<v>"}`; `--help` →
-  `{"help":"<rendered help text>"}`); `--human` prints clap's usual text. Exit 0.
+- **`--help` / `--version` obey the same rule** and are a first-class introspection
+  surface. Default (machine): `--version` → `{"name","version"}`; `--help` → a
+  **structured self-description** derived programmatically from the clap `Command` model
+  (never a hand-maintained table): `{"name","version","usage","args":[{"name","short",
+  "aliases":[…],"takes_value","value_name","doc"}],"subcommands":[{"name","doc","args":[…]}],
+  "exit_codes":{"0":"success",…}}`. Each arg's `aliases` lists accepted visible aliases
+  (e.g. `--oauth2-bearer` for `--token`), and `value_name` is `null` when `takes_value` is
+  false (flags carry no operand). The `exit_codes` table is part of the agent contract.
+  `--human` prints clap's decorated text unchanged. Exit 0.
 
 Rationale: deterministic, mode-independent output beats TTY-sniffing for an agent-first
 tool — an agent gets identical machine output whether piped or on a terminal, and humans

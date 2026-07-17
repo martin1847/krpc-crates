@@ -88,21 +88,95 @@ fn handle_parse_error(e: clap::Error, mode: Mode) -> ExitCode {
     ExitCode::from(2)
 }
 
-/// Emit clap help in the resolved mode: machine mode wraps the rendered help in a
-/// `{"help": …}` JSON object on stdout; human prints clap's text. Exit 0.
+/// Emit help in the resolved mode. Machine mode emits **structured** self-description
+/// JSON derived from the clap `Command` model (name/version/usage/args/subcommands +
+/// the exit-code contract) — a real introspection surface alongside discover/schema.
+/// Human mode prints clap's decorated text unchanged. Exit 0.
 fn emit_help(e: &clap::Error, mode: Mode) -> ExitCode {
     let stdout = io::stdout();
     let mut w = stdout.lock();
     match mode {
         Mode::Json => {
-            let obj = json!({ "help": e.render().to_string() });
-            let _ = writeln!(w, "{obj}");
+            let _ = writeln!(w, "{}", structured_help());
         }
         Mode::Human => {
             let _ = e.print();
         }
     }
     ExitCode::SUCCESS
+}
+
+/// Build the structured machine-help document by walking the built clap `Command`
+/// (no hand-maintained parallel table — it cannot drift from the parser).
+fn structured_help() -> serde_json::Value {
+    use clap::CommandFactory;
+    let mut cmd = Cli::command();
+    let usage = cmd.render_usage().to_string();
+    let subcommands: Vec<serde_json::Value> = cmd
+        .get_subcommands()
+        .filter(|sc| sc.get_name() != "help") // clap's auto help subcommand
+        .map(|sc| {
+            json!({
+                "name": sc.get_name(),
+                "doc": sc.get_about().map(|s| s.to_string()),
+                "args": args_json(sc, true), // skip inherited globals (shown at root)
+            })
+        })
+        .collect();
+    let mut exit_codes = serde_json::Map::new();
+    for (code, meaning) in error::EXIT_CODES {
+        exit_codes.insert((*code).to_owned(), json!(meaning));
+    }
+    json!({
+        "name": env!("CARGO_PKG_NAME"),
+        "version": env!("CARGO_PKG_VERSION"),
+        "usage": usage,
+        "args": args_json(&cmd, false),
+        "subcommands": subcommands,
+        "exit_codes": exit_codes,
+    })
+}
+
+/// Serialize a clap command's arguments to the structured-help arg shape, skipping
+/// the auto `help`/`version` flags and hidden args. `skip_globals` drops inherited
+/// global flags (listed once at the root, not repeated on every subcommand).
+fn args_json(cmd: &clap::Command, skip_globals: bool) -> Vec<serde_json::Value> {
+    cmd.get_arguments()
+        .filter(|a| !a.is_hide_set())
+        .filter(|a| a.get_id().as_str() != "help" && a.get_id().as_str() != "version")
+        .filter(|a| !(skip_globals && a.is_global_set()))
+        .map(|a| {
+            let long = a.get_long().map(|l| format!("--{l}"));
+            let short = a.get_short().map(|c| format!("-{c}"));
+            let name = long
+                .clone()
+                .or_else(|| short.clone())
+                .unwrap_or_else(|| a.get_id().as_str().to_owned());
+            let takes_value = a.get_action().takes_values();
+            // value_name only makes sense for value-taking args (CH1: null for flags).
+            let value_name = takes_value
+                .then(|| a.get_value_names().and_then(|v| v.first()).map(|s| s.to_string()))
+                .flatten();
+            // Machine-discoverable accepted aliases (CH2), e.g. `--oauth2-bearer`.
+            let mut aliases: Vec<String> = a
+                .get_visible_aliases()
+                .unwrap_or_default()
+                .iter()
+                .map(|l| format!("--{l}"))
+                .collect();
+            if let Some(shorts) = a.get_visible_short_aliases() {
+                aliases.extend(shorts.iter().map(|c| format!("-{c}")));
+            }
+            json!({
+                "name": name,
+                "short": short,
+                "aliases": aliases,
+                "takes_value": takes_value,
+                "value_name": value_name,
+                "doc": a.get_help().map(|h| h.to_string()),
+            })
+        })
+        .collect()
 }
 
 /// Emit the version in the resolved mode: `{"name","version"}` JSON on stdout, or
@@ -332,5 +406,91 @@ mod tests {
             &inv,
         );
         assert!(none.hint().is_none(), "NOT_FOUND gets no hint");
+    }
+
+    // Recursively assert the emitted machine help is fully model-derived: every
+    // non-hidden, non-auto clap arg (with correct value_name/aliases) and every
+    // subcommand appears — no hardcoded arg/subcommand list (CH2).
+    fn assert_help_matches(cmd: &clap::Command, node: &serde_json::Value, is_root: bool) {
+        use std::collections::{HashMap, HashSet};
+        let arg_nodes: HashMap<String, &serde_json::Value> = node["args"]
+            .as_array()
+            .expect("args array")
+            .iter()
+            .map(|a| (a["name"].as_str().unwrap().to_owned(), a))
+            .collect();
+        for arg in cmd.get_arguments() {
+            if arg.is_hide_set() {
+                continue;
+            }
+            let id = arg.get_id().as_str();
+            if id == "help" || id == "version" {
+                continue;
+            }
+            if !is_root && arg.is_global_set() {
+                continue; // globals are listed once at the root
+            }
+            let name = arg
+                .get_long()
+                .map(|l| format!("--{l}"))
+                .or_else(|| arg.get_short().map(|c| format!("-{c}")))
+                .unwrap_or_else(|| id.to_owned());
+            let aj = arg_nodes
+                .get(&name)
+                .unwrap_or_else(|| panic!("help missing arg {name} in {}", node["name"]));
+            // CH1: value_name null unless the arg takes a value.
+            if !arg.get_action().takes_values() {
+                assert!(aj["value_name"].is_null(), "{name}: flag must have null value_name");
+            }
+            // CH2: every visible alias is a machine field.
+            let json_aliases: HashSet<String> = aj["aliases"]
+                .as_array()
+                .expect("aliases array")
+                .iter()
+                .map(|x| x.as_str().unwrap().to_owned())
+                .collect();
+            for al in arg.get_visible_aliases().unwrap_or_default() {
+                assert!(json_aliases.contains(&format!("--{al}")), "{name}: alias --{al} missing");
+            }
+        }
+        let sub_nodes: HashMap<String, &serde_json::Value> = node
+            .get("subcommands")
+            .and_then(|s| s.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|s| (s["name"].as_str().unwrap().to_owned(), s))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for sc in cmd.get_subcommands() {
+            if sc.get_name() == "help" {
+                continue;
+            }
+            let snode = sub_nodes
+                .get(sc.get_name())
+                .unwrap_or_else(|| panic!("help missing subcommand {}", sc.get_name()));
+            assert_help_matches(sc, snode, false);
+        }
+    }
+
+    #[test]
+    fn structured_help_is_model_derived() {
+        use clap::CommandFactory;
+        let help = structured_help();
+        assert_eq!(help["name"], env!("CARGO_PKG_NAME"));
+        assert!(help["exit_codes"]["0"].is_string(), "exit-code table present");
+        assert!(help["usage"].as_str().unwrap().contains("rpcurl"));
+        assert_help_matches(&Cli::command(), &help, true);
+        // --oauth2-bearer is discoverable as a machine alias field, not just prose.
+        let token = help["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["name"] == "--token")
+            .expect("--token present");
+        assert!(
+            token["aliases"].as_array().unwrap().iter().any(|x| x == "--oauth2-bearer"),
+            "--oauth2-bearer must be a structured alias: {token}"
+        );
     }
 }
