@@ -1,11 +1,59 @@
+use crate::error::CliError;
 use krpc::proto::InputProto;
 use serde_json::{from_str, Value};
 
+/// rpcurl — command-line KRPC client.
+///
+/// Default (no subcommand) invokes an RPC: `rpcurl <url> -d '<json>'`. The
+/// introspection subcommands (`discover`, `schema`, `example`) talk plain HTTP
+/// to the server's `/agent/discover` endpoint instead.
 #[derive(clap::Parser, Debug)]
 #[command(author, version, about, long_about = None)]
-pub(crate) struct Args {
+#[command(args_conflicts_with_subcommands = true)]
+pub(crate) struct Cli {
+    #[command(subcommand)]
+    pub(crate) command: Option<Command>,
+
+    #[command(flatten)]
+    pub(crate) invoke: InvokeArgs,
+
+    /// Machine mode: pure JSON on stdout (no emoji/decoration); errors as a JSON
+    /// object on stderr. Default human mode keeps the emoji prefixes.
+    #[arg(long, global = true)]
+    pub(crate) json: bool,
+
+    /// Verbose mode: prints headers, input, URL, etc. (to stderr, never stdout).
+    #[arg(short, long, global = true, action = clap::ArgAction::SetTrue)]
+    pub(crate) verbose: bool,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub(crate) enum Command {
+    /// List services and methods exposed by a server (via GET /agent/discover).
+    Discover {
+        /// Server base URL, e.g. `http://127.0.0.1:50051`
+        base_url: String,
+    },
+    /// Show the input/output JSON schema for one `Service/method`.
+    Schema {
+        /// Server base URL, e.g. `http://127.0.0.1:50051`
+        base_url: String,
+        /// Method path, e.g. `Hello/hello`
+        method: String,
+    },
+    /// Generate a skeleton input JSON (placeholder values) for one method.
+    Example {
+        /// Server base URL, e.g. `http://127.0.0.1:50051`
+        base_url: String,
+        /// Method path, e.g. `Hello/hello`
+        method: String,
+    },
+}
+
+#[derive(clap::Args, Debug, Default)]
+pub(crate) struct InvokeArgs {
     /// RPC服务的URL,如 https://demo.krpc.tech/appName/DemoService/methodName
-    url: String,
+    pub(crate) url: Option<String>,
 
     /// 入参json, 优先级高于file, e.g. `-d '{"name":"KRPC"}'`
     #[arg(short, long)]
@@ -34,111 +82,184 @@ pub(crate) struct Args {
     /// Custom headers, e.g. `-H a=b -H c=d`
     #[arg(short = 'H', long)]
     header: Option<Vec<String>>,
-
-    // same with python
-    /// Verbose mode, prints headers, input, URL, etc.
-    #[arg(short, long, action = clap::ArgAction::SetTrue)]
-    pub verbose: bool,
 }
 
 const JSON_NULL: &str = "null";
 
-const HTTP_PREFIX_SIZE: usize = "https://".len();
-
-// without env feauture , customer .
-impl Args {
-    // fn from_env() -> Self {
-    //     let mut args = Args::parse();
-
-    //     // Handle environment variables if command line arguments are not provided
-    //     // args.token = args.token.or_else(|| env::var("RPC_TOKEN").ok());
-    //     args.cookie = args.cookie.or_else(|| env::var("RPC_COOKIE").ok());
-    //     args.c_id = args.c_id.or_else(|| env::var("RPC_CID").ok());
-    //     args.c_meta = args.c_meta.or_else(|| env::var("RPC_CMETA").ok());
-
-    //     args
-    // }
-
-    pub(crate) fn parse_url(&self) -> (String, String) {
-        let url = &self.url;
-        if self.verbose {
-            println!("[krpc url]:\n{}\n", url);
-        }
-
-        let path_slash = HTTP_PREFIX_SIZE + &url[HTTP_PREFIX_SIZE..].find('/').unwrap();
-
-        let http_host = url[0..path_slash].to_string();
-        let method_path = url[path_slash..].to_string();
-        (http_host, method_path)
+impl InvokeArgs {
+    /// Split the RPC url into `(http_host, method_path)`.
+    ///
+    /// Robust against `http://` vs `https://`: locates the scheme separator, then
+    /// the first `/` of the path. Returns a [`CliError::Usage`] for malformed urls
+    /// instead of panicking.
+    pub(crate) fn split_url(&self) -> Result<(String, String), CliError> {
+        let url = self
+            .url
+            .as_deref()
+            .ok_or_else(|| CliError::Usage("missing RPC url (or a subcommand)".to_owned()))?;
+        let scheme_end = url
+            .find("://")
+            .map(|i| i + 3)
+            .ok_or_else(|| CliError::Usage(format!("url must start with http:// or https:// < {url} >")))?;
+        let slash = url[scheme_end..]
+            .find('/')
+            .ok_or_else(|| CliError::Usage(format!("url missing /app/Service/method path < {url} >")))?;
+        let split = scheme_end + slash;
+        Ok((url[..split].to_owned(), url[split..].to_owned()))
     }
 
-    pub(crate) fn to_req(&self) -> tonic::Request<InputProto> {
-        let json = self.parse_data();
+    /// Resolve and validate the request JSON body from `-d` / `-f`, defaulting to
+    /// JSON `null`. Errors surface as [`CliError::Usage`].
+    pub(crate) fn read_data(&self) -> Result<String, CliError> {
+        let json_data = if let Some(data) = &self.data {
+            data.clone()
+        } else if let Some(file) = &self.file {
+            std::fs::read_to_string(file)
+                .map_err(|e| CliError::Usage(format!("cannot read file < {file} >: {e}")))?
+        } else {
+            JSON_NULL.to_owned()
+        };
+        from_str::<Value>(&json_data)
+            .map_err(|e| CliError::Usage(format!("failed to parse json < {json_data} >: {e}")))?;
+        Ok(json_data)
+    }
 
+    /// Build the tonic request with headers. Returns the request plus any
+    /// warnings (e.g. malformed `-H` entries) for the caller to report to stderr.
+    pub(crate) fn build_request(
+        &self,
+        json: String,
+    ) -> Result<(tonic::Request<InputProto>, Vec<String>), CliError> {
         let mut req = tonic::Request::new(InputProto { json });
-
-        self.fill_headers(req.metadata_mut());
-
-        req
+        let warnings = self.fill_headers(req.metadata_mut())?;
+        Ok((req, warnings))
     }
 
-    fn fill_headers(&self, header: &mut tonic::metadata::MetadataMap) {
-        self.header.as_ref().map(|list: &Vec<String>|
-            // parse_customer_headers(&list,
-            //     |k,v|{header.insert(k.as_str(), v.parse().unwrap());})
-            for kv in list{
-                let parts: Vec<&str> = kv.split('=').collect();
-                if parts.len() == 2 {
-                    use std::str::FromStr;
-                    let a = tonic::metadata::MetadataKey::from_str(parts[0]).unwrap();
-                    let b = parts[1];
-                    header.insert(a,b.parse().unwrap());
-                } else {
-                    println!("ignore malformed -H [ {} ]",kv);
+    fn fill_headers(
+        &self,
+        header: &mut tonic::metadata::MetadataMap,
+    ) -> Result<Vec<String>, CliError> {
+        use std::str::FromStr;
+        let mut warnings = Vec::new();
+
+        if let Some(list) = &self.header {
+            for kv in list {
+                match kv.split_once('=') {
+                    Some((k, v)) => {
+                        let key = tonic::metadata::MetadataKey::from_str(k)
+                            .map_err(|e| CliError::Usage(format!("bad header key < {k} >: {e}")))?;
+                        let val = v
+                            .parse()
+                            .map_err(|e| CliError::Usage(format!("bad header value < {v} >: {e}")))?;
+                        header.insert(key, val);
+                    }
+                    None => warnings.push(kv.clone()),
                 }
             }
-        );
+        }
 
         let cid: String = if let Some(c_id) = &self.c_id {
-            c_id.to_owned()
+            c_id.clone()
         } else {
-            format!("r-{}", gethostname::gethostname().to_str().unwrap())
+            format!("r-{}", gethostname::gethostname().to_str().unwrap_or("unknown"))
         };
+        header.insert(
+            "c-id",
+            cid.parse()
+                .map_err(|e| CliError::Usage(format!("bad c-id < {cid} >: {e}")))?,
+        );
 
-        header.insert("c-id", cid.parse().unwrap());
+        if let Some(s) = &self.c_meta {
+            header.insert(
+                "c-meta",
+                s.parse()
+                    .map_err(|e| CliError::Usage(format!("bad c-meta: {e}")))?,
+            );
+        }
+        if let Some(s) = &self.token {
+            header.insert(
+                "authorization",
+                format!("Bearer {s}")
+                    .parse()
+                    .map_err(|e| CliError::Usage(format!("bad token: {e}")))?,
+            );
+        }
+        if let Some(s) = &self.cookie {
+            header.insert(
+                "cookie",
+                s.parse()
+                    .map_err(|e| CliError::Usage(format!("bad cookie: {e}")))?,
+            );
+        }
 
-        self.c_meta
-            .as_ref()
-            .map(|s| header.insert("c-meta", s.parse().unwrap()));
-        self.token
-            .as_ref()
-            .map(|s| header.insert("authorization", format!("Bearer {}", s).parse().unwrap()));
-        self.cookie
-            .as_ref()
-            .map(|s| header.insert("cookie", s.parse().unwrap()));
+        Ok(warnings)
+    }
+}
 
-        if self.verbose {
-            println!("[request headers]:\n{:?}\n", header)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(url: &str) -> InvokeArgs {
+        InvokeArgs {
+            url: Some(url.to_owned()),
+            ..Default::default()
         }
     }
 
-    fn parse_data(&self) -> String {
-        let json_data = if let Some(data) = &self.data {
-            data.to_string()
-        } else if let Some(file) = &self.file {
-            use std::fs;
-            // use std::str::FromStr;
-            fs::read_to_string(file).unwrap()
-        } else {
-            //JSON null
-            JSON_NULL.to_string()
+    #[test]
+    fn split_url_http() {
+        let (host, path) = args("http://127.0.0.1:50051/quickstart/Hello/hello")
+            .split_url()
+            .unwrap();
+        assert_eq!(host, "http://127.0.0.1:50051");
+        assert_eq!(path, "/quickstart/Hello/hello");
+    }
+
+    #[test]
+    fn split_url_https() {
+        let (host, path) = args("https://demo.krpc.tech/app/Svc/method")
+            .split_url()
+            .unwrap();
+        assert_eq!(host, "https://demo.krpc.tech");
+        assert_eq!(path, "/app/Svc/method");
+    }
+
+    #[test]
+    fn split_url_no_scheme_is_usage_error() {
+        let err = args("127.0.0.1/app/Svc/m").split_url().unwrap_err();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn split_url_no_path_is_usage_error() {
+        let err = args("http://127.0.0.1:50051").split_url().unwrap_err();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn read_data_defaults_to_null() {
+        assert_eq!(args("http://h/a/S/m").read_data().unwrap(), "null");
+    }
+
+    #[test]
+    fn read_data_rejects_bad_json() {
+        let a = InvokeArgs {
+            url: Some("http://h/a/S/m".to_owned()),
+            data: Some("{not json".to_owned()),
+            ..Default::default()
         };
-        let _check_input = from_str::<Value>(&json_data)
-            .expect(format!("Falied to Parse Json < {} >", &json_data).as_str());
-        if self.verbose {
-            println!("[request json]:\n{}\n", json_data);
-        }
-        // println!("{:?}", args);
-        json_data
+        assert_eq!(a.read_data().unwrap_err().exit_code(), 2);
+    }
+
+    #[test]
+    fn malformed_header_becomes_warning_not_error() {
+        let a = InvokeArgs {
+            url: Some("http://h/a/S/m".to_owned()),
+            header: Some(vec!["noequals".to_owned(), "a=b".to_owned()]),
+            ..Default::default()
+        };
+        let (_req, warnings) = a.build_request("null".to_owned()).unwrap();
+        assert_eq!(warnings, vec!["noequals".to_owned()]);
     }
 }
