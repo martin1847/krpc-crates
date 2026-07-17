@@ -17,6 +17,17 @@ rpcurl $DEMO/bytesTime                               # no body (defaults to null
 rpcurl https://demo.krpc.tech/quickstart/Hello/hello -d '{"name":"KRPC"}'  # TLS gRPC
 ```
 
+### Try it against the live demo (no local server)
+
+A public sandbox runs the krpc quickstart at `https://demo.krpc.tech` (`HelloService`
+only, fake data, may reset anytime). The `https` scheme needs **rpcurl `>=1.1.0`**.
+
+```bash
+rpcurl discover https://demo.krpc.tech                                    # list services/methods
+rpcurl https://demo.krpc.tech/quickstart/Hello/hello -d '{"name":"you"}'   # invoke
+rpcurl https://demo.krpc.tech/quickstart/Hello/hello -d '{}'              # error envelope: {code,message,violations}
+```
+
 ## Output: machine JSON by default, `--human` to decorate
 
 **Machine JSON is the unconditional default** — bare JSON payload on stdout, JSONL
