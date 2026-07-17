@@ -105,6 +105,45 @@ pub(crate) fn parse_api_meta(body: &str) -> Result<ApiMeta, CliError> {
         .map_err(|e| CliError::Protocol(format!("could not parse /agent/discover ApiMeta: {e}")))
 }
 
+/// All `Service/method` paths in the meta, for did-you-mean suggestions.
+fn all_paths(meta: &ApiMeta) -> Vec<String> {
+    meta.apis
+        .iter()
+        .flat_map(|a| a.methods.iter().map(move |m| format!("{}/{}", a.name, m.name)))
+        .collect()
+}
+
+/// Levenshtein edit distance (full matrix; method inventories are tiny).
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// Nearest known path within edit distance 2, as a "did you mean" clause (or
+/// empty). Enables the agent self-correction loop on a mistyped method.
+fn did_you_mean(meta: &ApiMeta, path: &str) -> String {
+    let best = all_paths(meta)
+        .into_iter()
+        .map(|p| (edit_distance(path, &p), p))
+        .filter(|(d, _)| *d <= 2)
+        .min_by_key(|(d, _)| *d);
+    match best {
+        Some((_, p)) => format!(" (did you mean `{p}`?)"),
+        None => String::new(),
+    }
+}
+
 /// Locate a method by `Service/method` path within the discovered meta.
 fn find_method<'a>(meta: &'a ApiMeta, path: &str) -> Result<(&'a Api, &'a Method), CliError> {
     let (svc, m) = path
@@ -114,12 +153,12 @@ fn find_method<'a>(meta: &'a ApiMeta, path: &str) -> Result<(&'a Api, &'a Method
         .apis
         .iter()
         .find(|a| a.name == svc)
-        .ok_or_else(|| CliError::Usage(format!("unknown service < {svc} >")))?;
+        .ok_or_else(|| CliError::Usage(format!("unknown service < {svc} >{}", did_you_mean(meta, path))))?;
     let method = api
         .methods
         .iter()
         .find(|x| x.name == m)
-        .ok_or_else(|| CliError::Usage(format!("unknown method < {path} >")))?;
+        .ok_or_else(|| CliError::Usage(format!("unknown method < {path} >{}", did_you_mean(meta, path))))?;
     Ok((api, method))
 }
 

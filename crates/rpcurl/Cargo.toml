@@ -1,6 +1,6 @@
 [package]
 name = "rpcurl"
-version = "1.0.0"
+version = "1.1.0"
 description = "🦀[ Cli Client For KRPC ]"
 rust-version.workspace = true
 edition.workspace = true
@@ -26,6 +26,10 @@ tokio.workspace = true
 
 [build-dependencies]
 static_vcruntime = "3.0.0"
+
+[dev-dependencies]
+# integration test asserts the default `r-<hostname>` c-id never leaks into logs
+gethostname = "1.1.0"
 
 [lints]
 workspace = true

@@ -17,7 +17,7 @@ at zero design cost*; never chase curl consistency for its own sake.
 **Ruling consequences baked into this design:**
 - **Compatibility is a non-constraint.** Few users; a clean re-architecture is
   authorized. No aliases, no deprecation windows, no dual-accept grammars.
-- **One release: `1.1.0`.** Every change here ships in 1.1.0. (Normal SemVer would call a
+- **One release: `1.1.0`.** Every item marked 1.1.0 in §1/§3.1 ships in this release. (Normal SemVer would call a
   default-output change "major"; the maintainer waived compat, so the version tag is just
   the next release, not a migration event.) The only downstream coordination is our own
   CI consumer — one paragraph in §3, not a phase plan.
@@ -92,14 +92,14 @@ there is no migration window (compat waived).
 |---|---|---|---|
 | `-d '<json>'` (`args.rs:59-60`) | `-d` sends arg verbatim `[curl:8.7.1]` | **1.1.0** · H/L | Keep `-d`. Raw JSON string; `@`-prefix = file, `@-` = stdin (below). curl-transfer is free. |
 | `-f <path>` (`args.rs:63-64`) | curl reads files via `-d @file` `[curl:8.7.1]` | **1.1.0** (replace) · H/S | Fold file input into `-d @file`; **drop `-f`/`--file`**. One obvious way to pass a body; agents already think `@file`. `-f` short is freed (left unassigned). |
-| (no stdin) | `-d @-` = stdin `[curl:8.7.1]` | **1.1.0** · H/S | `-d @-` reads stdin. Agents pipe generated bodies; high value, trivial. Stdin is one-shot (see §2.4 buffering note). |
+| (no stdin) | `-d @-` = stdin `[curl:8.7.1]` | **1.1.0** · H/S | `-d @-` reads stdin. Agents pipe generated bodies. File/stdin reads are **capped at 8 MiB** (bounds memory on a hostile pipe); a JSON parse error reports byte length + parser location only — **never the raw body** — so a token/PII payload with a trailing syntax error is not echoed to diagnostics/CI logs. Non-UTF-8 input → usage error carrying no raw bytes. |
 | `-d` beats `-f` silently (`args.rs:114-121`) | curl joins multiple `-d` `[curl:8.7.1]` | **1.1.0** · M/S | **Multiple body sources = usage error (exit 2)**, not silent last-wins. curl's `&`-join is form semantics, meaningless for one JSON doc; erroring is the agent-honest choice. |
 
 ### 1.2 Headers
 
 | rpcurl today | curl ref | Verdict · value/effort | Resolution |
 |---|---|---|---|
-| `-H 'k=v'` split on `=` (`args.rs:147`) | `-H 'Name: value'` colon `[curl:8.7.1]` | **1.1.0** · M/S | Accept `Name: value` (curl-transfer free) **and** keep `k=v` — both parse unambiguously (colon vs equals), no window needed. Agent value is modest but the fix is trivial. |
+| `-H 'k=v'` split on `=` (`args.rs:147`) | `-H 'Name: value'` colon `[curl:8.7.1]` | **1.1.0** · M/S | Accept `Name: value` (curl-transfer free) **and** keep `k=v` — both parse unambiguously (colon first, else equals), no window needed. Header names are **lowercased** (tonic metadata keys must be ascii-lowercase; also lets an agent paste a curl `Content-Type:` header verbatim). No `W_HEADER_SEPARATOR` warning — both forms are first-class (compat waived). |
 | malformed `-H`→warn, ignored (`args.rs:156`, `main.rs:108-111`) | curl handles specially `[curl:verify]` | **1.1.0** · M/S | Keep warn-not-fail, but emit through the **structured diagnostics channel** (§2.3, `W_HEADER_MALFORMED`), not a bare stderr line. Agents need to detect the warning programmatically. |
 
 ### 1.3 Cookies — the `-c` trap (agent-native win regardless of curl)
@@ -123,11 +123,11 @@ there is no migration window (compat waived).
 | (no `-s`/`-S`) | `-s` silent, `-S` show-error `[curl:8.7.1]` | **P1** · M/S | `-s` (suppress diagnostics) / `-S` (re-show errors under `-s`). Real agent value (quiet batch runs) but not blocking the flagship; cheap when done. |
 | (no `-o`) | `-o <file>` `[curl:8.7.1]` | **P1** · L/S | Shell redirection already covers this; low marginal agent value. Backlog. |
 
-### 1.6 Output mode — the flagship agent-native default
+### 1.6 Output mode — machine-JSON default + `--human`
 
 | rpcurl today | curl ref | Verdict · value/effort | Resolution |
 |---|---|---|---|
-| `--json` output flag; **no TTY detect** (`main.rs:27`) | curl `--json` = HTTP request shortcut (N/A on gRPC) | **1.1.0** · H/M | Replace with **`--format human\|json\|auto`, default `auto`** (§2.1). `auto` = TTY→human, pipe/file→machine JSON + JSONL stderr. This is the headline: **an agent piping rpcurl gets machine output with zero flags.** Compat is waived, so it ships as the default in 1.1.0. `--json` and curl's request-shortcut meaning are both dropped (the latter has no gRPC wire meaning). |
+| `--json` output flag; **no TTY detect** (`main.rs:27`) | curl `--json` = HTTP request shortcut (N/A on gRPC) | **1.1.0** · H/M | **Default = machine JSON, unconditionally** (bare JSON on stdout + JSONL stderr; **no TTY detection**, terminal or pipe alike). **`--human`** (boolean) is the only switch into decorated output. `--format`/`auto`/`--json` are all dropped. Rationale: deterministic mode-independent output beats TTY-sniffing for an agent-first tool; humans opt in explicitly. |
 
 ### 1.7 Fail semantics & error body
 
@@ -179,15 +179,15 @@ number-mimicry is impossible anyway. `--curl-exit-codes` compat mode → **not p
 
 ## 2. Agent-native spec
 
-### 2.1 Streams & the flagship `--format auto` default
+### 2.1 Streams & the default-JSON contract (`--human` opts in)
 
 **Stream invariant (unchanged from today's `output.rs`, hardened):**
 - **stdout carries success *payload* only.** On error, stdout receives bytes **only**
   under `--fail-with-body` (P1) with a server body (§1.7). Sole exception.
 - **stderr carries diagnostics** (verbose, warnings, terminal error record) — never
   success payload.
-- **TTY state governs *decoration only*, never routing.** (Mandate: TTY for decoration,
-  never for error routing.)
+- **No TTY detection.** The mode is fixed by the `--human` flag alone (absent = machine
+  JSON), never by whether stdout is a terminal — deterministic in a terminal or a pipe.
 
 **Per-outcome contract:**
 
@@ -198,33 +198,31 @@ number-mimicry is impossible anyway. `--curl-exit-codes` compat mode → **not p
 | error, `--fail-with-body` (P1) | raw HTTP body bytes (HTTP faces only; gRPC invoke: empty) | terminal error record | non-zero |
 | error, `-s` / `-sS` (P1) | as above | suppressed / error record | non-zero |
 
-`-o` (P1) redirects the same stdout bytes. `--format` controls success-payload rendering
-and stderr diagnostics; `--fail-with-body` stdout remains verbatim. No combination puts
-an error *record* on stdout or success payload on stderr.
+`-o` (P1) redirects the same stdout bytes. Mode (`--human`, else default JSON) controls
+success-payload rendering and stderr diagnostics; `--fail-with-body` stdout remains
+verbatim. No combination puts an error *record* on stdout or success payload on stderr.
 
 **`--fail-with-body`, one definition (P1):** *body* = the **raw HTTP response-body
 bytes** of a face; exists **only on HTTP faces** (introspection today; future MCP/HTTP).
 A gRPC error is a `Status`/`Out::Error` *message* (`main.rs:120-125,152-159`), **not a
 body** → the flag is N/A/no-op on invoke. On HTTP faces it writes exact raw bytes,
-**exempt from JSON-output validity** (the body may not be JSON; `--format` does not
-reshape it).
+**exempt from JSON-output validity** (the body may not be JSON; mode does not reshape it).
 
-**`--format human | json | auto`, DEFAULT = `auto` (flagship, 1.1.0).** The maintainer
-authorized re-architecture, so the agent-native behavior is the *default*, not an opt-in:
+**Default = machine JSON, unconditionally (flagship, 1.1.0).** No TTY detection for
+payload or diagnostics: a terminal and a pipe both get bare JSON on stdout + JSONL
+diagnostics on stderr. Deterministic everywhere — the agent-native default.
 
-- **`auto`** — two complete sub-modes, each byte-identical to a fixed mode:
-  - **stdout is a TTY** → human payload on stdout + decorated diagnostics on stderr
-    (= `--format human`).
-  - **stdout is NOT a TTY** (pipe/file) → bare JSON payload on stdout + JSONL diagnostics
-    on stderr (= `--format json`).
-- **`human`** / **`json`** force a mode regardless of TTY (capture, or logs).
-- The same TTY split governs `--include` metadata (§2.3) and the decoration of the
-  `--fail-with-body` stderr record (raw stdout bytes unaffected by mode).
-- Implementation note: `std::io::IsTerminal` on the stdout handle, consulted only when
-  `--format` is `auto`.
+- **`--human`** (boolean, the only switch) opts into decorated output: emoji/pretty
+  payload on stdout + decorated (⚠️/❌/`[label]`) diagnostics on stderr.
+- There is **no `--format` enum, no `auto`, no `IsTerminal` mode logic** — all removed.
+- **`--help` / `--version` obey the same rule**: default emits a single JSON object on
+  stdout (`--version` → `{"name":"rpcurl","version":"<v>"}`; `--help` →
+  `{"help":"<rendered help text>"}`); `--human` prints clap's usual text. Exit 0.
 
-This supersedes today's "human unless `--json`" (`main.rs:27`) and the earlier
-conservative default-OFF stance — an explicit maintainer decision for this clean release.
+Rationale: deterministic, mode-independent output beats TTY-sniffing for an agent-first
+tool — an agent gets identical machine output whether piped or on a terminal, and humans
+opt in explicitly. This supersedes the earlier `--format auto` TTY-gated proposal (an
+explicit maintainer ruling for this clean release).
 
 ### 2.2 Machine error record — the core contract (AGENT-002 aligned)
 
@@ -263,27 +261,31 @@ a distinct namespace from the error record's string `code` — documented, not m
 Warnings (malformed `-H`, tolerated separator) and the terminal error share **one framed
 stderr stream**:
 
-- **Machine mode** (`--format json`, and `auto` when stdout is non-TTY — byte-identical):
-  **JSONL**, exactly one JSON object per stderr line, each with `type` ∈
-  `"warning"|"error"`, so a consumer can distinguish a warning from the error object.
+- **Machine mode** (the default; `--human` absent): **JSONL**, exactly one JSON object per
+  stderr line, each with `type` ∈ `"warning"|"error"|"debug"`, so a consumer distinguishes
+  a warning or a `-v` debug line from the terminal error object.
 - **Warning record**: `{"type":"warning","code":"<STABLE_CODE>","message":"..."}`. Stable
-  codes: `W_HEADER_MALFORMED`, `W_HEADER_SEPARATOR`, … (crate registry; additive).
+  codes: `W_HEADER_MALFORMED` (the only P0 warning today), … (crate registry; additive).
 - **Error record**: the §2.2 object with `type:"error"`.
+- **Debug record** (`-v` only): `{"type":"debug","label":"…","message":"…"}` — verbose
+  dumps are framed, not raw prose, so `-v` never corrupts the JSONL stream. Sensitive
+  values for `authorization`, `cookie`, `c-id`, and `c-meta` are **redacted** in these
+  dumps — `c-id` defaults to `r-<hostname>` (an internal hostname; repo rule: never into
+  logs) and `c-meta` may carry caller-identifying values. The wire headers are unchanged.
 - **Ordering**: processing order; terminal error is the **last** record; ≤1 `error` per run.
 - **Success-with-warnings**: warnings on stderr, payload on stdout, **exit 0**.
 - **Versioning**: diagnostics schema **v1**; a framing break bumps the CLI version and is
   noted in release notes. Human mode uses decorated lines (⚠️/❌), not part of the machine
-  contract.
+  contract. **Verbose (`-v`) emits framed `type:"debug"` records in machine mode** and
+  decorated `[label]` blocks in human mode — never raw prose on a machine stderr stream.
 - **`-s`/`-S`** (P1): `-s` suppresses all diagnostics; `-S` restores the error record.
 
 **Diagnostics & payload by output mode** (single source of truth):
 
 | mode | stdout payload | stderr diagnostics | `meta` (`--include`, P1) |
 |---|---|---|---|
-| `--format human` | decorated | decorated (⚠️/❌) | decorated `[response meta]` on stderr |
-| `--format json` | bare JSON envelope | JSONL (`type`-framed) | `meta` field on the stdout envelope |
-| `--format auto`, TTY | = `human` | = `human` | = `human` |
-| `--format auto`, non-TTY | = `json` | = `json` | = `json` |
+| default (machine) | bare JSON envelope | JSONL (`type`-framed) | `meta` field on the stdout envelope |
+| `--human` | decorated (emoji/pretty) | decorated (⚠️/❌) | decorated `[response meta]` on stderr |
 
 **Response-metadata side-channel (`meta`) — schema (for `--include`, P1):** a JSON object
 where **every key maps to an array of values** (always arrays; order preserves wire
@@ -295,7 +297,7 @@ repetition):
 
 - ASCII keys → arrays of UTF-8 strings. **`-bin` keys** (gRPC binary metadata) →
   **base64** string arrays; the `-bin` suffix **is** the encoding marker (no `encoding`
-  field). Placement: json/`auto`-pipe → `meta` on the stdout envelope; human/`auto`-TTY →
+  field). Placement: default (machine) → `meta` on the stdout envelope; `--human` →
   decorated stderr block, never mixed into stdout.
 
 **Value/effort: H/M** — prerequisite for any structured warning; ships in 1.1.0 even
@@ -304,7 +306,7 @@ though `--include` (its `meta` consumer) is P1, because the error framing needs 
 ### 2.4 Introspection surface (already strong — keep)
 
 `discover <base>` / `schema <base> <method>` / `example <base> <method>` over HTTP
-`/agent/discover` (`args.rs:30-51`, `discover.rs:564-589`), honoring `--format`. Keep all
+`/agent/discover` (`args.rs:30-51`, `discover.rs:564-589`), honoring the mode (`--human`). Keep all
 three verbs unchanged (curl has no analog; nothing to rename). `discover` lists
 `path`/`arg`/`res`/`doc` (`discover.rs:453-484`); `schema` returns `{method,doc,input,
 output}` with validation folded in (`discover.rs:514-522`); `example` a skeleton
@@ -312,8 +314,9 @@ output}` with validation folded in (`discover.rs:514-522`); `example` a skeleton
 
 - **Grammar note**: introspection takes a **base** url; invoke takes a **full method**
   url — document prominently (a common agent stumble).
-- **Body buffering**: `-d @-` stdin is drained once; if retry (P1) is ever added, the body
-  is buffered before attempt 1 with a bounded size.
+- **Body buffering / limits**: `-d @-` stdin is drained once, capped at **8 MiB**
+  (`MAX_BODY_BYTES`); oversized input → usage error (exit 2), summarized never copied.
+  Parse errors report length + location, not the body (redaction).
 - **Limitation (A-3)**: introspection is **http-only** (`discover.rs:425-429`); TLS
   servers can't be discovered. https support = **P1** (value M, effort M).
 
@@ -322,7 +325,7 @@ output}` with validation folded in (`discover.rs:514-522`); `example` a skeleton
 ### 2.5 Self-correction loop (agent walkthrough)
 
 ```
-1. $ rpcurl discover http://host/quickstart        # piped → auto picks machine JSON
+1. $ rpcurl discover http://host/quickstart        # default → machine JSON (no flag)
    → {"services":[{"name":"Hello","methods":[
         {"path":"Hello/hello","arg":"HelloRequest","res":"HelloReply","doc":"..."}]}]}
 2. $ rpcurl schema http://host/quickstart Hello/hello
@@ -341,13 +344,17 @@ output}` with validation folded in (`discover.rs:514-522`); `example` a skeleton
    stdout: {"code":0,"data":{"greeting":"Hi KRPC"}}   exit 0
 ```
 
-The flagship `auto` default means **no `--json` flag anywhere in this loop** — piping is
-enough. Two local wins ship in 1.1.0 (no server change, high agent value):
-- **did-you-mean**: `find_method`/`split_url` failures (`discover.rs:108-124`,
-  `args.rs:95-109`) suggest the nearest known `path` (edit distance ≤2). **Value/effort:
-  H/M.**
-- **error → schema pointer**: on `remote INVALID_ARGUMENT`, add a `cli.hint`
-  `"rpcurl schema <host> <method>"`. **Value/effort: H/S.**
+The default machine-JSON mode means **no output flag anywhere in this loop** — you just
+run it. Two local wins ship in 1.1.0 (no server change, high agent value):
+- **did-you-mean (introspection)**: `find_method` failures (`discover.rs`) suggest the
+  nearest known `Service/method` path (edit distance ≤2) — the discover catalog is in
+  hand, so this is a local suggestion. **Value/effort: H/M.**
+- **error → self-correction hint (invoke)**: the invoke path has **no local method
+  catalog** (no discover fetched), so it can't do edit-distance did-you-mean; instead a
+  `remote` error carries a `cli.hint` pointing at the right recovery command —
+  `INVALID_ARGUMENT` → `rpcurl schema <host> <method>`, `UNIMPLEMENTED` (method not
+  found) → `rpcurl discover <host>`. `split_url` structural failures return explicit
+  format guidance. **Value/effort: H/S.**
 
 ### 2.6 MCP verb (P1, gated)
 
@@ -364,9 +371,9 @@ zero server surface. Backlog.
 
 ### 3.1 One release: 1.1.0 (P0 scope)
 
-Everything below ships together in **1.1.0**; no migration window (compat waived):
+Every item marked 1.1.0 (below) ships together in this release; no migration window (compat waived):
 
-1. `--format human|json|auto` with **`auto` default** (flagship) — §1.6/§2.1
+1. Default machine JSON + **`--human`** opt-in (flagship; no TTY detection) — §1.6/§2.1
 2. Machine error record `{code,message,violations?}`+`type`+`cli` (`violations` degrades) — §2.2
 3. Diagnostics JSONL contract (warnings + error framing + `meta` schema) — §2.3
 4. `-c` hard-error + `-b` cookie-send — §1.3
@@ -374,7 +381,7 @@ Everything below ships together in **1.1.0**; no migration window (compat waived
 6. exit set `0–5` (add `5`=timeout) — §1.11
 7. `--max-time` + `--connect-timeout` (`-m` reassigned) — §1.8
 8. `--client-id` / `--client-meta` rename (`-i`/`-m` freed), `-H` colon+equals, `--oauth2-bearer` alias — §1.2/§1.4/§1.9
-9. did-you-mean + error→schema `cli.hint` — §2.5
+9. did-you-mean (introspection) + invoke `cli.hint` (schema/discover pointers) — §2.5
 
 ### 3.2 P1 backlog (each value/effort)
 
@@ -396,7 +403,7 @@ Everything below ships together in **1.1.0**; no migration window (compat waived
 
 The external `krpc` native-smoke CI pulls the latest linux-musl `rpcurl` (AGENTS.md);
 it is our consumer, not present in this checkout. Because 1.1.0 changes the default output
-(auto), the drop of `-f`/`-c`/`--json`, and the error-record shape, **pin native-smoke to
+(now machine JSON by default), the drop of `-f`/`-c`/`--json`/`--format`, and the error-record shape, **pin native-smoke to
 the `1.0.0` binary, audit its rpcurl invocations against the 1.1.0 surface (flags, streams,
 exit codes), update them, then unpin.** One coordinated bump — no phased plan.
 
@@ -427,13 +434,13 @@ train's scope, self-evident at a glance.
 
 | # | P0 item | Agent value | Effort | Why it earns its place |
 |---|---|---|---|---|
-| 1 | `--format auto` default (TTY→human, pipe→JSON+JSONL) | **H** | M | Flagship: machine output with zero flags — the core agent-native win. |
+| 1 | Default machine JSON + `--human` opt-in (no TTY detection) | **H** | M | Flagship: deterministic machine output with zero flags — the core agent-native win. |
 | 2 | Error record `{code,message,violations?}`+`type`+`cli` | **H** | M | The data contract every agent error path parses; AGENT-002-aligned. |
 | 3 | Diagnostics JSONL + `meta` schema | **H** | M | Lets agents tell warnings from errors; prereq for the rest. |
 | 4 | exit set `0–5` | **H** | S | `$?` branching; only code `5` is new. |
 | 5 | `-c` hard-error + `-b` cookie-send | **H** | S | Kills a silent-wrong dangerous trap. |
 | 6 | `-d @file` / `-d @-` / one-body-error | **H** | S | How agents feed generated bodies; trivial. |
-| 7 | did-you-mean + error→schema `cli.hint` | **H** | M | Closes the self-correction loop locally, no server change. |
+| 7 | did-you-mean (introspection) + invoke `cli.hint` (schema/discover pointers) | **H** | M | Closes the self-correction loop locally, no server change. |
 | 8 | `--max-time` + `--connect-timeout` | **H** | M | Bounded waits — agents must not hang. |
 | 9 | `--client-id/--client-meta` rename, `-H` colon, `--oauth2-bearer` | **M** | S | Frees shorts for agent-native reuse; cheap familiarity. |
 
