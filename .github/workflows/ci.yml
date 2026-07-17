@@ -1,0 +1,84 @@
+name: CI
+
+# PR-time validation: prove build health on all 4 release targets, run unit
+# tests per host OS, and lint — BEFORE merge. No packaging, no artifacts, no
+# release (that is release-rpcurl.yml, tag-only). The 4-target build reuses
+# build-rpcurl.yml so it can never drift from the release build.
+
+on:
+  pull_request:
+    paths:
+      - "**/*.rs"
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
+jobs:
+  # Same 4-target release build (package=false: build only, no artifacts).
+  build:
+    name: Build
+    uses: ./.github/workflows/build-rpcurl.yml
+    with:
+      package: false
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: brew install cmake nasm ninja
+
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake nasm ninja-build
+
+      - name: Install Windows build tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nasm llvm -y
+          cargo install --force --locked bindgen-cli
+
+      - name: Test
+        if: runner.os != 'Windows'
+        run: cargo test --locked -p rpcurl
+
+      - name: Test Windows
+        if: runner.os == 'Windows'
+        env:
+          AWS_LC_SYS_EXTERNAL_BINDGEN: "1"
+        run: cargo test --locked -p rpcurl
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install Linux build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake nasm ninja-build
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -p rpcurl -- -D warnings

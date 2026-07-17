@@ -105,6 +105,45 @@ pub(crate) fn parse_api_meta(body: &str) -> Result<ApiMeta, CliError> {
         .map_err(|e| CliError::Protocol(format!("could not parse /agent/discover ApiMeta: {e}")))
 }
 
+/// All `Service/method` paths in the meta, for did-you-mean suggestions.
+fn all_paths(meta: &ApiMeta) -> Vec<String> {
+    meta.apis
+        .iter()
+        .flat_map(|a| a.methods.iter().map(move |m| format!("{}/{}", a.name, m.name)))
+        .collect()
+}
+
+/// Levenshtein edit distance (full matrix; method inventories are tiny).
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// Nearest known path within edit distance 2, as a "did you mean" clause (or
+/// empty). Enables the agent self-correction loop on a mistyped method.
+fn did_you_mean(meta: &ApiMeta, path: &str) -> String {
+    let best = all_paths(meta)
+        .into_iter()
+        .map(|p| (edit_distance(path, &p), p))
+        .filter(|(d, _)| *d <= 2)
+        .min_by_key(|(d, _)| *d);
+    match best {
+        Some((_, p)) => format!(" (did you mean `{p}`?)"),
+        None => String::new(),
+    }
+}
+
 /// Locate a method by `Service/method` path within the discovered meta.
 fn find_method<'a>(meta: &'a ApiMeta, path: &str) -> Result<(&'a Api, &'a Method), CliError> {
     let (svc, m) = path
@@ -114,12 +153,12 @@ fn find_method<'a>(meta: &'a ApiMeta, path: &str) -> Result<(&'a Api, &'a Method
         .apis
         .iter()
         .find(|a| a.name == svc)
-        .ok_or_else(|| CliError::Usage(format!("unknown service < {svc} >")))?;
+        .ok_or_else(|| CliError::Usage(format!("unknown service < {svc} >{}", did_you_mean(meta, path))))?;
     let method = api
         .methods
         .iter()
         .find(|x| x.name == m)
-        .ok_or_else(|| CliError::Usage(format!("unknown method < {path} >")))?;
+        .ok_or_else(|| CliError::Usage(format!("unknown method < {path} >{}", did_you_mean(meta, path))))?;
     Ok((api, method))
 }
 
@@ -409,7 +448,7 @@ fn origin_of(base: &str) -> Result<String, CliError> {
     let scheme_end = base
         .find("://")
         .map(|i| i + 3)
-        .ok_or_else(|| CliError::Usage(format!("base url must start with http:// < {base} >")))?;
+        .ok_or_else(|| CliError::Usage(format!("base url must start with http:// or https:// < {base} >")))?;
     let end = base[scheme_end..]
         .find('/')
         .map(|i| scheme_end + i)
@@ -417,17 +456,46 @@ fn origin_of(base: &str) -> Result<String, CliError> {
     Ok(base[..end].to_owned())
 }
 
+/// Validate a discover URL scheme; only `http`/`https` are meaningful for the
+/// plain-HTTP `/agent/discover` face.
+fn web_scheme(uri: &Uri) -> Result<(), CliError> {
+    match uri.scheme_str() {
+        Some("http") | Some("https") => Ok(()),
+        other => Err(CliError::Usage(format!(
+            "discover supports http:// and https:// only, got scheme < {} >",
+            other.unwrap_or("(none)")
+        ))),
+    }
+}
+
 async fn fetch_api_meta(base_url: &str) -> Result<String, CliError> {
     let url = format!("{}/agent/discover", origin_of(base_url)?);
     let uri: Uri = url
         .parse()
         .map_err(|e| CliError::Usage(format!("invalid discover url < {url} >: {e}")))?;
-    if uri.scheme_str() != Some("http") {
-        return Err(CliError::Usage(
-            "discover only supports http:// (plain HTTP on the krpc http port)".to_owned(),
-        ));
+    web_scheme(&uri)?;
+
+    // rustls + native trust roots — same trust behavior as the gRPC invoke path
+    // (krpc's `with_native_roots`), aws-lc-rs provider (already in the tree). The
+    // `https_or_http` connector serves both plaintext and TLS origins.
+    let mut roots = rustls::RootCertStore::empty();
+    for cert in rustls_native_certs::load_native_certs().certs {
+        let _ = roots.add(cert);
     }
-    let client: Client<_, Empty<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
+    let tls = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("aws-lc-rs supports the default protocol versions")
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    let https = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_tls_config(tls)
+        .https_or_http()
+        .enable_http1()
+        .build();
+    let client: Client<_, Empty<Bytes>> = Client::builder(TokioExecutor::new()).build(https);
+
     let resp = client
         .get(uri)
         .await
@@ -600,6 +668,23 @@ mod tests {
 
     fn meta() -> ApiMeta {
         parse_api_meta(FIXTURE).unwrap()
+    }
+
+    #[test]
+    fn origin_of_keeps_https_scheme() {
+        assert_eq!(
+            origin_of("https://demo.krpc.tech/quickstart/Hello/hello").unwrap(),
+            "https://demo.krpc.tech"
+        );
+        assert_eq!(origin_of("http://127.0.0.1:50051/app").unwrap(), "http://127.0.0.1:50051");
+    }
+
+    #[test]
+    fn web_scheme_accepts_http_and_https_only() {
+        assert!(web_scheme(&"http://h/agent/discover".parse::<Uri>().unwrap()).is_ok());
+        assert!(web_scheme(&"https://h/agent/discover".parse::<Uri>().unwrap()).is_ok());
+        let err = web_scheme(&"grpc://h/x".parse::<Uri>().unwrap()).unwrap_err();
+        assert_eq!(err.exit_code(), 2, "non-web scheme is a usage error");
     }
 
     #[test]
