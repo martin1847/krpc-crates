@@ -323,8 +323,9 @@ output}` with validation folded in (`discover.rs:514-522`); `example` a skeleton
 - **Body buffering / limits**: `-d @-` stdin is drained once, capped at **8 MiB**
   (`MAX_BODY_BYTES`); oversized input → usage error (exit 2), summarized never copied.
   Parse errors report length + location, not the body (redaction).
-- **Limitation (A-3)**: introspection is **http-only** (`discover.rs:425-429`); TLS
-  servers can't be discovered. https support = **P1** (value M, effort M).
+- **HTTPS supported** (former A-3 limitation, **resolved**): introspection uses rustls +
+  native trust roots (aws-lc-rs) — same trust behavior as the gRPC invoke path — and the
+  connector serves both `http://` and `https://`; non-web schemes are a usage error.
 
 **Value/effort: —/none** — exists at `fd4d47d`; no P0 work.
 
@@ -396,7 +397,7 @@ Every item marked 1.1.0 (below) ships together in this release; no migration win
 | `-s` / `-S` silent/show-error | M | S | quiet batch runs |
 | `--fail-with-body` (HTTP-face-only) | M | S | read HTTP/MCP error bodies |
 | `--include` + `meta` side-channel | M | M | trace ids; `-i` reserved |
-| https introspection | M | M | fixes A-3; unblocks TLS servers |
+| ~~https introspection~~ **(shipped)** | M | M | rustls + native roots; resolved A-3 |
 | retry (guarded) | M | L | GET-only default; `--retry-unsafe` for invoke |
 | `rpcurl mcp list/call` | M | L | gated on pinned MCP contract (§4) |
 | `-o <file>` output | L | S | shell redirection covers it |
@@ -462,8 +463,8 @@ value/effort column.
   one-body usage error.
 - **A-2**: malformed `-H` warned-and-ignored to plain stderr (`args.rs:156`,
   `main.rs:108-111`); §1.2/§2.3 keep tolerance but move it to the structured channel.
-- **A-3**: introspection is http-only (`discover.rs:425-429`); TLS servers can't be
-  discovered. https support = P1.
+- **A-3 (resolved)**: introspection now supports `https://` (rustls + native trust roots,
+  aws-lc-rs); was http-only at `fd4d47d`. See the https commit.
 - **A-4**: README shows `cargo run` examples and old `-i/-m` names (README:12-38); update
   belongs to the implementation train.
 - **A-5**: success envelope `code` is numeric (`output.rs:24-38`) while the error

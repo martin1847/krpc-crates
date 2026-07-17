@@ -453,3 +453,24 @@ fn discover_malformed_body_is_protocol_error_exit_4() {
     assert!(!out.stderr.is_empty());
     assert_eq!(out.status.code(), Some(4));
 }
+
+// --- live https (env-gated: network) -------------------------------------
+// Skipped unless RPCURL_LIVE=1 (no network dependence in the default suite).
+// The orchestrator runs the real smoke against demo.krpc.tech.
+
+#[test]
+fn live_https_discover_demo() {
+    // Skipped unless RPCURL_LIVE=1 (silent: -D print_stderr forbids a skip message).
+    if std::env::var("RPCURL_LIVE").is_err() {
+        return;
+    }
+    let out = run(&["discover", "https://demo.krpc.tech"]);
+    assert!(
+        out.status.success(),
+        "live https discover failed: {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).expect("live discover -> JSON");
+    assert!(v["services"].is_array(), "discover returns a services array over https");
+}

@@ -448,7 +448,7 @@ fn origin_of(base: &str) -> Result<String, CliError> {
     let scheme_end = base
         .find("://")
         .map(|i| i + 3)
-        .ok_or_else(|| CliError::Usage(format!("base url must start with http:// < {base} >")))?;
+        .ok_or_else(|| CliError::Usage(format!("base url must start with http:// or https:// < {base} >")))?;
     let end = base[scheme_end..]
         .find('/')
         .map(|i| scheme_end + i)
@@ -456,17 +456,46 @@ fn origin_of(base: &str) -> Result<String, CliError> {
     Ok(base[..end].to_owned())
 }
 
+/// Validate a discover URL scheme; only `http`/`https` are meaningful for the
+/// plain-HTTP `/agent/discover` face.
+fn web_scheme(uri: &Uri) -> Result<(), CliError> {
+    match uri.scheme_str() {
+        Some("http") | Some("https") => Ok(()),
+        other => Err(CliError::Usage(format!(
+            "discover supports http:// and https:// only, got scheme < {} >",
+            other.unwrap_or("(none)")
+        ))),
+    }
+}
+
 async fn fetch_api_meta(base_url: &str) -> Result<String, CliError> {
     let url = format!("{}/agent/discover", origin_of(base_url)?);
     let uri: Uri = url
         .parse()
         .map_err(|e| CliError::Usage(format!("invalid discover url < {url} >: {e}")))?;
-    if uri.scheme_str() != Some("http") {
-        return Err(CliError::Usage(
-            "discover only supports http:// (plain HTTP on the krpc http port)".to_owned(),
-        ));
+    web_scheme(&uri)?;
+
+    // rustls + native trust roots — same trust behavior as the gRPC invoke path
+    // (krpc's `with_native_roots`), aws-lc-rs provider (already in the tree). The
+    // `https_or_http` connector serves both plaintext and TLS origins.
+    let mut roots = rustls::RootCertStore::empty();
+    for cert in rustls_native_certs::load_native_certs().certs {
+        let _ = roots.add(cert);
     }
-    let client: Client<_, Empty<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
+    let tls = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("aws-lc-rs supports the default protocol versions")
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    let https = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_tls_config(tls)
+        .https_or_http()
+        .enable_http1()
+        .build();
+    let client: Client<_, Empty<Bytes>> = Client::builder(TokioExecutor::new()).build(https);
+
     let resp = client
         .get(uri)
         .await
@@ -639,6 +668,23 @@ mod tests {
 
     fn meta() -> ApiMeta {
         parse_api_meta(FIXTURE).unwrap()
+    }
+
+    #[test]
+    fn origin_of_keeps_https_scheme() {
+        assert_eq!(
+            origin_of("https://demo.krpc.tech/quickstart/Hello/hello").unwrap(),
+            "https://demo.krpc.tech"
+        );
+        assert_eq!(origin_of("http://127.0.0.1:50051/app").unwrap(), "http://127.0.0.1:50051");
+    }
+
+    #[test]
+    fn web_scheme_accepts_http_and_https_only() {
+        assert!(web_scheme(&"http://h/agent/discover".parse::<Uri>().unwrap()).is_ok());
+        assert!(web_scheme(&"https://h/agent/discover".parse::<Uri>().unwrap()).is_ok());
+        let err = web_scheme(&"grpc://h/x".parse::<Uri>().unwrap()).unwrap_err();
+        assert_eq!(err.exit_code(), 2, "non-web scheme is a usage error");
     }
 
     #[test]

@@ -334,3 +334,54 @@ Commit: `feat(rpcurl): structured machine help` (4th on this branch, local, no p
   the `aliases`/`value_name` arg shape.
 - Gates: `cargo test -p rpcurl` → **69 passed** (37 unit + 32 integration); `cargo clippy
   --all-targets -p rpcurl -- -D warnings` → **0 warnings**.
+
+---
+
+## https for introspection and invoke (5th commit)
+
+Maintainer: "rpcurl discover 只支持 http:// 有问题，要支持 HTTPS". Real consumer:
+`https://demo.krpc.tech` (nginx TLS termination; `/agent/*` proxied; 443 grpc_pass).
+
+**Finding — invoke already supported https.** The `krpc` client's `connect_uri`
+(cargo git checkout `clt.rs:33-55`) already selects rustls TLS with `with_native_roots`
+for `https://` URLs (aws-lc-rs provider). So `rpcurl https://…/Svc/method -d …` already
+goes through TLS gRPC — **no rpcurl change needed** for invoke; scheme drives TLS
+(`split_url` already accepts https). Verified: `rpcurl https://127.0.0.1:1/a/S/m -d {}` →
+`connect` (exit 3), not a usage rejection.
+
+**Fix — introspection https** (the actual gap; `discover.rs::fetch_api_meta` used a
+plaintext `build_http()` client and rejected non-http). Now builds a rustls
+`HttpsConnector` via `hyper-rustls` that serves **both** `http://` and `https://`
+(`https_or_http()`); a new `web_scheme()` rejects non-web schemes with a usage error.
+
+**TLS choices (justified):**
+- **Trust roots: `rustls-native-certs`** (system trust store), chosen to match the gRPC
+  invoke path's `with_native_roots()` — consistent trust, supports corporate/private CAs
+  an agent may face. Already in the dependency tree (via tonic's TLS).
+- **Provider: `aws-lc-rs`**, built explicitly with `ClientConfig::builder_with_provider`
+  (no global `install_default`, so no conflict with krpc's install). Already in-tree.
+- **New dependency: `hyper-rustls` only** (`default-features=false`, `["http1","aws-lc-rs"]`).
+  rustls-family, **no openssl**. `rustls` + `rustls-native-certs` promoted from
+  transitive to direct (no new crates). No global crypto-provider install.
+
+**Release/musl:** no new build-target implication. `aws-lc-sys`/`aws-lc-rs` already
+compile in the `x86_64-unknown-linux-musl` release build (krpc TLS), and the CI/release
+matrix already installs `cmake`/`musl-tools`/`nasm`. `hyper-rustls` is pure Rust glue.
+*Not built on musl locally* (darwin host) — relying on the existing musl matrix coverage.
+
+**Docs:** design §2.4 (A-3 limitation **resolved**), §3.2 backlog (https introspection
+marked shipped), Appendix A-3 (resolved), README (introspection HTTP/HTTPS + an https
+example; invoke https example).
+
+**Tests:** unit `web_scheme_accepts_http_and_https_only` (http/https Ok, `grpc://` → usage
+exit 2), `origin_of_keeps_https_scheme`. Integration `live_https_discover_demo` is
+**env-gated** (`RPCURL_LIVE=1`; silent skip otherwise — `-D print_stderr` forbids a skip
+message) against `demo.krpc.tech`; the orchestrator runs the real smoke. Smoke here:
+`discover https://127.0.0.1:1` → connect (accepted TLS attempt); `discover grpc://…` →
+usage; invoke https → connect.
+
+### Gates (https)
+`cargo test -p rpcurl` → **72 passed** (39 unit + 33 integration, live test skipped);
+`cargo clippy --all-targets -p rpcurl -- -D warnings` → **0 warnings**;
+`cargo build -r -p rpcurl` → OK. Commit: `feat(rpcurl): https for introspection and
+invoke` (5th on this branch, local, no push).

@@ -14,6 +14,7 @@ rpcurl $DEMO/hello -d '{"name":"KRPC","age":28}'   # inline JSON body
 rpcurl $DEMO/hello -d @body.json                    # body from a file
 echo '{"name":"KRPC"}' | rpcurl $DEMO/hello -d @-   # body from stdin
 rpcurl $DEMO/bytesTime                               # no body (defaults to null)
+rpcurl https://demo.krpc.tech/quickstart/Hello/hello -d '{"name":"KRPC"}'  # TLS gRPC
 ```
 
 ## Output: machine JSON by default, `--human` to decorate
@@ -92,12 +93,14 @@ CLI-only fields live under `cli`:
 
 ## Introspection
 
-Plain HTTP against the server's `/agent/discover`:
+Against the server's `/agent/discover` over **HTTP or HTTPS** (scheme drives TLS —
+rustls with native trust roots):
 
 ```bash
 rpcurl discover http://127.0.0.1:50051                 # list services/methods
 rpcurl schema   http://127.0.0.1:50051 Hello/hello     # JSON schema for one method
 rpcurl example  http://127.0.0.1:50051 Hello/hello     # skeleton input JSON
+rpcurl discover https://demo.krpc.tech                 # TLS (e.g. behind nginx)
 ```
 
 All use the default machine mode; `--human` opts into decorated output. A mistyped method suggests the nearest known one (`did you mean …?`).
